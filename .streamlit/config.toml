@@ -1,5 +1,2 @@
-[server]
-baseUrlPath = "gbm-inequalities"
-
 [browser]
 gatherUsageStats = false
