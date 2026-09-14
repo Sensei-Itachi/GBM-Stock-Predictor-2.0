@@ -165,8 +165,6 @@ def run_dashboard():
     left, right = st.columns(2)
     left.pyplot(fan_chart(paths, market.ticker, years), clear_figure=True)
     right.pyplot(terminal_chart(paths, result["target_price"], market.ticker), clear_figure=True)
-    st.caption("GBM assumes constant drift and volatility, independent normally distributed log returns, and no jumps or regime changes.")
-
 
 if __name__ == "__main__":
     run_dashboard()
