@@ -69,13 +69,10 @@ def probability_with_ci(event):
     return probability, max(0.0, probability - margin), min(1.0, probability + margin)
 
 
-def summarize_paths(paths, target_return, percentile_range):
+def summarize_paths(paths, target_return):
     initial, terminal = float(paths[0, 0]), paths[-1]
     target_price = initial * (1 + target_return)
-    lower_percentile, upper_percentile = percentile_range
-    lower_price, median_price, upper_price = np.percentile(
-        terminal, [lower_percentile, 50, upper_percentile]
-    )
+    tenth_percentile_price, median_price = np.percentile(terminal, [10, 50])
     output = {"target_price": target_price, "mean_terminal": float(terminal.mean()),
               "median_terminal": float(median_price),
               "median_return": float(np.median(terminal / initial - 1))}
@@ -83,27 +80,25 @@ def summarize_paths(paths, target_return, percentile_range):
                         "double": terminal >= 2 * initial}.items():
         probability, low, high = probability_with_ci(event)
         output.update({f"p_{name}": probability, f"p_{name}_low": low, f"p_{name}_high": high})
-    output.update({"lower_percentile": lower_percentile, "upper_percentile": upper_percentile,
-                   "lower_price": float(lower_price), "upper_price": float(upper_price)})
+    output["tenth_percentile_price"] = float(tenth_percentile_price)
     return output
 
 
 def model_signal(result):
     """Return a transparent scenario label; this is not personalized investment advice."""
     if result["p_target"] >= 0.60 and result["p_loss"] <= 0.40:
-        return "BUY", "The model has at least a 60% chance of reaching your target and no more than a 40% chance of a loss."
+        return "BUY"
     if result["p_loss"] >= 0.60 or (result["p_target"] < 0.40 and result["median_return"] < 0):
-        return "SELL", "The model assigns a high chance of loss or a low chance of reaching your chosen target with a negative median return."
-    return "HOLD", "The simulation is mixed: it does not meet this tool's deliberately simple BUY or SELL thresholds."
+        return "SELL"
+    return "HOLD"
 
 
-def fan_chart(paths, ticker, years, percentile_range):
-    lower_percentile, upper_percentile = percentile_range
-    quantiles = np.percentile(paths, [lower_percentile, 50, upper_percentile], axis=1)
+def fan_chart(paths, ticker, years):
+    quantiles = np.percentile(paths, [10, 50, 90], axis=1)
     time = np.linspace(0, years, len(paths))
     fig, ax = plt.subplots(figsize=(11, 5.5))
     ax.fill_between(time, quantiles[0], quantiles[2], color="#4C78A8", alpha=.25,
-                    label=f"{lower_percentile}th–{upper_percentile}th percentile")
+                    label="10th–90th percentile")
     ax.plot(time, quantiles[1], color="#153E75", linewidth=2.5, label="Predicted price (median)")
     ax.axhline(paths[0, 0], color="#72B7B2", linestyle=":", linewidth=2,
                label=f"Current price: ${paths[0, 0]:,.2f}")
@@ -127,7 +122,6 @@ def run_dashboard():
     from datetime import date
     st.set_page_config(page_title="Monte Carlo Stock Predictor", page_icon="📈", layout="wide")
     st.title("Monte Carlo Stock Predictor")
-    st.caption("Configurable Monte Carlo stock-price scenarios — not investment advice.")
     with st.sidebar:
         st.header("Assumptions")
         ticker = st.text_input("Ticker", "AAPL").upper().strip()
@@ -138,10 +132,6 @@ def run_dashboard():
         mode = st.radio("Drift method", ["Historical", "Risk-neutral"])
         risk_free_rate = st.number_input("Risk-free rate (%)", 0.0, 20.0, 4.0, .1) / 100
         target_return = st.number_input("Target return (%)", -90.0, 500.0, 20.0, 1.0) / 100
-        percentile_range = st.select_slider(
-            "Forecast percentile range", options=[5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95],
-            value=(10, 90), format_func=lambda value: f"{value}th"
-        )
         seed = st.number_input("Random seed", 0, value=42, step=1)
         run = st.button("Run simulation", type="primary")
     if not run:
@@ -151,19 +141,19 @@ def run_dashboard():
         market = download_market_inputs(ticker, start_date, end_date)
         drift = market.historical_drift if mode == "Historical" else risk_free_rate
         paths = gbm(years, trials, drift, market.annual_volatility, s_0=market.spot_price, seed=seed)
-        result = summarize_paths(paths, target_return, percentile_range)
+        result = summarize_paths(paths, target_return)
     except (ValueError, RuntimeError) as error:
         st.error(str(error)); return
     st.subheader("Data and model")
     st.write(f"Using **{market.observations:,}** daily returns from {market.start_date} to {market.end_date}. "
              f"Historical drift: **{market.historical_drift:.2%}**; volatility: **{market.annual_volatility:.2%}**. "
              f"Simulation drift: **{drift:.2%}** ({mode.lower()}).")
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Current stock price", f"${market.spot_price:,.2f}")
-    c2.metric("New predicted price", f"${result['median_terminal']:,.2f}", f"{result['median_return']:+.1%} from current")
-    c3.metric(f"{result['lower_percentile']}th–{result['upper_percentile']}th range",
-              f"${result['lower_price']:,.2f}–${result['upper_price']:,.2f}")
-    c4.metric(f"P(return ≥ {target_return:.0%})", f"{result['p_target']:.1%}", f"Target ${result['target_price']:,.2f}")
+    c2.metric(f"P(return ≥ {target_return:.0%})", f"{result['p_target']:.1%}", f"Target ${result['target_price']:,.2f}")
+    c3.metric("P(double)", f"{result['p_double']:.1%}", f"95% CI {result['p_double_low']:.1%}–{result['p_double_high']:.1%}")
+    c4.metric("P(loss)", f"{result['p_loss']:.1%}", f"95% CI {result['p_loss_low']:.1%}–{result['p_loss_high']:.1%}")
+    c5.metric("10th-percentile stock price", f"${result['tenth_percentile_price']:,.2f}")
     signal, rationale = model_signal(result)
     st.subheader("Model signal")
     if signal == "BUY":
@@ -172,13 +162,9 @@ def run_dashboard():
         st.error(f"**{signal} — simulation signal only.** {rationale}")
     else:
         st.warning(f"**{signal} — simulation signal only.** {rationale}")
-    st.caption("This is an educational model label, not personalized investment advice or a trade instruction. It does not consider your finances, taxes, risk tolerance, other holdings, valuation, news, or market conditions.")
     left, right = st.columns(2)
-    left.pyplot(fan_chart(paths, market.ticker, years, percentile_range), clear_figure=True)
+    left.pyplot(fan_chart(paths, market.ticker, years), clear_figure=True)
     right.pyplot(terminal_chart(paths, result["target_price"], market.ticker), clear_figure=True)
-    st.subheader("Forecast price range")
-    st.dataframe({"Reference": ["Current stock price", f"{result['lower_percentile']}th percentile", "New predicted price (median)", f"{result['upper_percentile']}th percentile"],
-                  "Price": [market.spot_price, result["lower_price"], result["median_terminal"], result["upper_price"]]}, hide_index=True)
     st.caption("GBM assumes constant drift and volatility, independent normally distributed log returns, and no jumps or regime changes.")
 
 
