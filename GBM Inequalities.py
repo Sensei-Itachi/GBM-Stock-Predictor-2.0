@@ -1,7 +1,3 @@
-"""Interactive Geometric Brownian Motion stock-price simulator.
-
-Launch with: streamlit run "GBM Inequalities.py"
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -73,17 +69,22 @@ def probability_with_ci(event):
     return probability, max(0.0, probability - margin), min(1.0, probability + margin)
 
 
-def summarize_paths(paths, target_return):
+def summarize_paths(paths, target_return, percentile_range):
     initial, terminal = float(paths[0, 0]), paths[-1]
     target_price = initial * (1 + target_return)
+    lower_percentile, upper_percentile = percentile_range
+    lower_price, median_price, upper_price = np.percentile(
+        terminal, [lower_percentile, 50, upper_percentile]
+    )
     output = {"target_price": target_price, "mean_terminal": float(terminal.mean()),
-              "median_terminal": float(np.median(terminal)),
+              "median_terminal": float(median_price),
               "median_return": float(np.median(terminal / initial - 1))}
     for name, event in {"target": terminal >= target_price, "loss": terminal < initial,
                         "double": terminal >= 2 * initial}.items():
         probability, low, high = probability_with_ci(event)
         output.update({f"p_{name}": probability, f"p_{name}_low": low, f"p_{name}_high": high})
-    output.update(dict(zip(("p05", "p25", "p50", "p75", "p95"), np.percentile(terminal, [5, 25, 50, 75, 95]))))
+    output.update({"lower_percentile": lower_percentile, "upper_percentile": upper_percentile,
+                   "lower_price": float(lower_price), "upper_price": float(upper_price)})
     return output
 
 
@@ -96,13 +97,16 @@ def model_signal(result):
     return "HOLD", "The simulation is mixed: it does not meet this tool's deliberately simple BUY or SELL thresholds."
 
 
-def fan_chart(paths, ticker, years):
-    quantiles = np.percentile(paths, [5, 25, 50, 75, 95], axis=1)
+def fan_chart(paths, ticker, years, percentile_range):
+    lower_percentile, upper_percentile = percentile_range
+    quantiles = np.percentile(paths, [lower_percentile, 50, upper_percentile], axis=1)
     time = np.linspace(0, years, len(paths))
     fig, ax = plt.subplots(figsize=(11, 5.5))
-    ax.fill_between(time, quantiles[0], quantiles[4], color="#4C78A8", alpha=.15, label="5th–95th percentile")
-    ax.fill_between(time, quantiles[1], quantiles[3], color="#4C78A8", alpha=.30, label="25th–75th percentile")
-    ax.plot(time, quantiles[2], color="#153E75", linewidth=2.5, label="Median")
+    ax.fill_between(time, quantiles[0], quantiles[2], color="#4C78A8", alpha=.25,
+                    label=f"{lower_percentile}th–{upper_percentile}th percentile")
+    ax.plot(time, quantiles[1], color="#153E75", linewidth=2.5, label="Predicted price (median)")
+    ax.axhline(paths[0, 0], color="#72B7B2", linestyle=":", linewidth=2,
+               label=f"Current price: ${paths[0, 0]:,.2f}")
     ax.set(title=f"{ticker}: GBM forecast fan chart", xlabel="Years", ylabel="Price")
     ax.legend(frameon=False); fig.tight_layout()
     return fig
@@ -112,7 +116,7 @@ def terminal_chart(paths, target_price, ticker):
     fig, ax = plt.subplots(figsize=(11, 5.5))
     ax.hist(paths[-1], bins=60, density=True, color="#4C78A8", alpha=.75, edgecolor="white")
     ax.axvline(target_price, color="#E45756", linewidth=2.5, label=f"Target: ${target_price:,.2f}")
-    ax.axvline(np.median(paths[-1]), color="#153E75", linestyle="--", label="Median terminal price")
+    ax.axvline(np.median(paths[-1]), color="#153E75", linestyle="--", label="Predicted price (median)")
     ax.set(title=f"{ticker}: terminal-price distribution", xlabel="Price at forecast horizon", ylabel="Density")
     ax.legend(frameon=False); fig.tight_layout()
     return fig
@@ -121,8 +125,8 @@ def terminal_chart(paths, target_price, ticker):
 def run_dashboard():
     import streamlit as st
     from datetime import date
-    st.set_page_config(page_title="GBM Inequalities", page_icon="📈", layout="wide")
-    st.title("GBM Inequalities")
+    st.set_page_config(page_title="Monte Carlo Stock Predictor", page_icon="📈", layout="wide")
+    st.title("Monte Carlo Stock Predictor")
     st.caption("Configurable Monte Carlo stock-price scenarios — not investment advice.")
     with st.sidebar:
         st.header("Assumptions")
@@ -134,6 +138,10 @@ def run_dashboard():
         mode = st.radio("Drift method", ["Historical", "Risk-neutral"])
         risk_free_rate = st.number_input("Risk-free rate (%)", 0.0, 20.0, 4.0, .1) / 100
         target_return = st.number_input("Target return (%)", -90.0, 500.0, 20.0, 1.0) / 100
+        percentile_range = st.select_slider(
+            "Forecast percentile range", options=[5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95],
+            value=(10, 90), format_func=lambda value: f"{value}th"
+        )
         seed = st.number_input("Random seed", 0, value=42, step=1)
         run = st.button("Run simulation", type="primary")
     if not run:
@@ -143,7 +151,7 @@ def run_dashboard():
         market = download_market_inputs(ticker, start_date, end_date)
         drift = market.historical_drift if mode == "Historical" else risk_free_rate
         paths = gbm(years, trials, drift, market.annual_volatility, s_0=market.spot_price, seed=seed)
-        result = summarize_paths(paths, target_return)
+        result = summarize_paths(paths, target_return, percentile_range)
     except (ValueError, RuntimeError) as error:
         st.error(str(error)); return
     st.subheader("Data and model")
@@ -151,10 +159,11 @@ def run_dashboard():
              f"Historical drift: **{market.historical_drift:.2%}**; volatility: **{market.annual_volatility:.2%}**. "
              f"Simulation drift: **{drift:.2%}** ({mode.lower()}).")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric(f"P(return ≥ {target_return:.0%})", f"{result['p_target']:.1%}", f"95% CI {result['p_target_low']:.1%}–{result['p_target_high']:.1%}")
-    c2.metric("P(loss)", f"{result['p_loss']:.1%}", f"95% CI {result['p_loss_low']:.1%}–{result['p_loss_high']:.1%}")
-    c3.metric("P(double)", f"{result['p_double']:.1%}", f"95% CI {result['p_double_low']:.1%}–{result['p_double_high']:.1%}")
-    c4.metric("Median terminal price", f"${result['median_terminal']:,.2f}", f"Target ${result['target_price']:,.2f}")
+    c1.metric("Current stock price", f"${market.spot_price:,.2f}")
+    c2.metric("New predicted price", f"${result['median_terminal']:,.2f}", f"{result['median_return']:+.1%} from current")
+    c3.metric(f"{result['lower_percentile']}th–{result['upper_percentile']}th range",
+              f"${result['lower_price']:,.2f}–${result['upper_price']:,.2f}")
+    c4.metric(f"P(return ≥ {target_return:.0%})", f"{result['p_target']:.1%}", f"Target ${result['target_price']:,.2f}")
     signal, rationale = model_signal(result)
     st.subheader("Model signal")
     if signal == "BUY":
@@ -165,11 +174,11 @@ def run_dashboard():
         st.warning(f"**{signal} — simulation signal only.** {rationale}")
     st.caption("This is an educational model label, not personalized investment advice or a trade instruction. It does not consider your finances, taxes, risk tolerance, other holdings, valuation, news, or market conditions.")
     left, right = st.columns(2)
-    left.pyplot(fan_chart(paths, market.ticker, years), clear_figure=True)
+    left.pyplot(fan_chart(paths, market.ticker, years, percentile_range), clear_figure=True)
     right.pyplot(terminal_chart(paths, result["target_price"], market.ticker), clear_figure=True)
-    st.subheader("Terminal-price percentiles")
-    st.dataframe({"Percentile": ["5th", "25th", "50th", "75th", "95th"],
-                  "Price": [result[key] for key in ("p05", "p25", "p50", "p75", "p95")]}, hide_index=True)
+    st.subheader("Forecast price range")
+    st.dataframe({"Reference": ["Current stock price", f"{result['lower_percentile']}th percentile", "New predicted price (median)", f"{result['upper_percentile']}th percentile"],
+                  "Price": [market.spot_price, result["lower_price"], result["median_terminal"], result["upper_price"]]}, hide_index=True)
     st.caption("GBM assumes constant drift and volatility, independent normally distributed log returns, and no jumps or regime changes.")
 
 
