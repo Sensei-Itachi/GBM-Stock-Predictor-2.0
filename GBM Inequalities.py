@@ -72,7 +72,7 @@ def probability_with_ci(event):
 def summarize_paths(paths, target_return):
     initial, terminal = float(paths[0, 0]), paths[-1]
     target_price = initial * (1 + target_return)
-    tenth_percentile_price, median_price = np.percentile(terminal, [10, 50])
+    median_price = np.percentile(terminal, 50)
     output = {"target_price": target_price, "mean_terminal": float(terminal.mean()),
               "median_terminal": float(median_price),
               "median_return": float(np.median(terminal / initial - 1))}
@@ -80,7 +80,7 @@ def summarize_paths(paths, target_return):
                         "double": terminal >= 2 * initial}.items():
         probability, low, high = probability_with_ci(event)
         output.update({f"p_{name}": probability, f"p_{name}_low": low, f"p_{name}_high": high})
-    output["tenth_percentile_price"] = float(tenth_percentile_price)
+    output["median_terminal"] = float(median_price)
     return output
 
 
@@ -153,7 +153,7 @@ def run_dashboard():
     c2.metric(f"P(return ≥ {target_return:.0%})", f"{result['p_target']:.1%}", f"Target ${result['target_price']:,.2f}")
     c3.metric("P(double)", f"{result['p_double']:.1%}", f"95% CI {result['p_double_low']:.1%}–{result['p_double_high']:.1%}")
     c4.metric("P(loss)", f"{result['p_loss']:.1%}", f"95% CI {result['p_loss_low']:.1%}–{result['p_loss_high']:.1%}")
-    c5.metric("10th-percentile stock price", f"${result['tenth_percentile_price']:,.2f}")
+    c5.metric("50th-percentile predicted price", f"${result['median_terminal']:,.2f}")
     signal = model_signal(result)
     st.subheader("Model signal")
     if signal == "BUY":
