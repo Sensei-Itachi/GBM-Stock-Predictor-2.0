@@ -85,7 +85,7 @@ def summarize_paths(paths, target_return):
 
 
 def model_signal(result):
-    """Return a transparent scenario label; this is not personalized investment advice."""
+    """Return a simple simulation label."""
     if result["p_target"] >= 0.60 and result["p_loss"] <= 0.40:
         return "BUY"
     if result["p_loss"] >= 0.60 or (result["p_target"] < 0.40 and result["median_return"] < 0):
@@ -154,14 +154,14 @@ def run_dashboard():
     c3.metric("P(double)", f"{result['p_double']:.1%}", f"95% CI {result['p_double_low']:.1%}–{result['p_double_high']:.1%}")
     c4.metric("P(loss)", f"{result['p_loss']:.1%}", f"95% CI {result['p_loss_low']:.1%}–{result['p_loss_high']:.1%}")
     c5.metric("10th-percentile stock price", f"${result['tenth_percentile_price']:,.2f}")
-    signal, rationale = model_signal(result)
+    signal = model_signal(result)
     st.subheader("Model signal")
     if signal == "BUY":
-        st.success(f"**{signal} — simulation signal only.** {rationale}")
+        st.success(signal)
     elif signal == "SELL":
-        st.error(f"**{signal} — simulation signal only.** {rationale}")
+        st.error(signal)
     else:
-        st.warning(f"**{signal} — simulation signal only.** {rationale}")
+        st.warning(signal)
     left, right = st.columns(2)
     left.pyplot(fan_chart(paths, market.ticker, years), clear_figure=True)
     right.pyplot(terminal_chart(paths, result["target_price"], market.ticker), clear_figure=True)
